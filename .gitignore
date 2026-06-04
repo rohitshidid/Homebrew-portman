@@ -1,4 +1,5 @@
 /portmap
 /dist/
 /.gocache/
+/.gomodcache/
 /.DS_Store

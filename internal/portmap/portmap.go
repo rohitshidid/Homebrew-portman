@@ -32,6 +32,7 @@ type Entry struct {
 type Options struct {
 	IncludeDocker bool
 	Protocol      string
+	Port          int
 	Runner        Runner
 	ServicesPath  string
 }
@@ -76,6 +77,9 @@ func Scan(ctx context.Context, opts Options) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.Port != 0 && !validPort(opts.Port) {
+		return nil, fmt.Errorf("port must be between 1 and 65535")
+	}
 	if opts.Runner == nil {
 		opts.Runner = defaultRunner
 	}
@@ -88,7 +92,7 @@ func Scan(ctx context.Context, opts Options) ([]Entry, error) {
 
 	services := loadServices(opts.ServicesPath)
 	entries := assembleEntries(listeners, dockerPorts, services)
-	entries = filterEntries(entries, protocol)
+	entries = filterEntries(entries, protocol, opts.Port)
 	sortEntries(entries)
 	return entries, nil
 }
@@ -599,16 +603,16 @@ func joinDockerField(ports []dockerPort, field func(dockerPort) string) string {
 	return strings.Join(values, ",")
 }
 
-func filterEntries(entries []Entry, protocol string) []Entry {
-	if protocol == "all" {
-		return entries
-	}
-
+func filterEntries(entries []Entry, protocol string, port int) []Entry {
 	filtered := entries[:0]
 	for _, entry := range entries {
-		if entry.Protocol == protocol {
-			filtered = append(filtered, entry)
+		if protocol != "all" && entry.Protocol != protocol {
+			continue
 		}
+		if port != 0 && entry.Port != port {
+			continue
+		}
+		filtered = append(filtered, entry)
 	}
 	return filtered
 }

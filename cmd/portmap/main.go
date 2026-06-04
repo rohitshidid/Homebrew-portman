@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/rohitshidid/portmap/internal/portmap"
@@ -25,8 +27,24 @@ func run(args []string) int {
 	protocol := fs.String("protocol", "all", "protocol to show: all, tcp, or udp")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", 5*time.Second, "maximum scan duration")
+	portFilter := 0
+
+	fs.Func("port", "show only one listening port", func(value string) error {
+		port, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid port %q", value)
+		}
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("port must be between 1 and 65535")
+		}
+		portFilter = port
+		return nil
+	})
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 
@@ -41,6 +59,7 @@ func run(args []string) int {
 	entries, err := portmap.Scan(ctx, portmap.Options{
 		IncludeDocker: !*noDocker,
 		Protocol:      *protocol,
+		Port:          portFilter,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "portmap: %v\n", err)

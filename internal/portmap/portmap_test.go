@@ -128,6 +128,51 @@ func TestScanWithFakeRunner(t *testing.T) {
 	}
 }
 
+func TestScanWithPortFilter(t *testing.T) {
+	runner := fakeRunner{
+		"lsof\x00-nP\x00-iTCP\x00-sTCP:LISTEN\x00-F\x00pcLtn": strings.Join([]string{
+			"p123",
+			"cpostgres",
+			"Lalice",
+			"f9",
+			"tIPv4",
+			"n127.0.0.1:5432",
+			"p456",
+			"credis-server",
+			"Lalice",
+			"f10",
+			"tIPv4",
+			"n127.0.0.1:6379",
+		}, "\n"),
+		"lsof\x00-nP\x00-iUDP\x00-F\x00pcLtn":                         "",
+		"docker\x00ps\x00--format\x00{{.ID}}\t{{.Names}}\t{{.Ports}}": "abc123\tpg\t127.0.0.1:5432->5432/tcp\n",
+	}
+
+	entries, err := Scan(context.Background(), Options{
+		IncludeDocker: true,
+		Protocol:      "all",
+		Port:          5432,
+		Runner:        runner,
+		ServicesPath:  "/path/that/does/not/exist",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].Port != 5432 || entries[0].Container != "pg" || entries[0].Service != "postgres" {
+		t.Fatalf("unexpected filtered entry: %+v", entries[0])
+	}
+}
+
+func TestScanRejectsInvalidPortFilter(t *testing.T) {
+	_, err := Scan(context.Background(), Options{Port: 70000})
+	if err == nil {
+		t.Fatal("expected invalid port error")
+	}
+}
+
 var errCommandNotMapped = errors.New("command not mapped")
 
 type fakeRunner map[string]string

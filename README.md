@@ -32,6 +32,7 @@ go install ./cmd/portmap
 
 ```sh
 portmap
+portmap --port 5432
 portmap --json
 portmap --protocol tcp
 portmap --protocol udp --no-docker
@@ -41,6 +42,7 @@ Flags:
 
 - `--json`: print JSON instead of a table
 - `--no-docker`: skip Docker annotations
+- `--port 5432`: show only one listening port
 - `--protocol all|tcp|udp`: filter rows by protocol
 - `--timeout 5s`: cap the scan duration
 - `--version`: print the build version
