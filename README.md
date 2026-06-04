@@ -35,6 +35,7 @@ portmap
 portmap --port 5432
 portmap --watch
 portmap check 5432
+portmap --help
 portmap --json
 portmap --protocol tcp
 portmap --protocol udp --no-docker

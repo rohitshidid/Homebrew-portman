@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -27,6 +28,9 @@ func run(args []string) int {
 
 	fs := flag.NewFlagSet("portmap", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	fs.Usage = func() {
+		writeMainUsage(fs.Output())
+	}
 
 	jsonOutput := fs.Bool("json", false, "print JSON instead of a table")
 	noDocker := fs.Bool("no-docker", false, "skip Docker container port annotations")
@@ -96,6 +100,9 @@ func run(args []string) int {
 func runCheck(args []string) int {
 	fs := flag.NewFlagSet("portmap check", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	fs.Usage = func() {
+		writeCheckUsage(fs.Output())
+	}
 
 	noDocker := fs.Bool("no-docker", false, "skip Docker container annotations")
 	protocol := fs.String("protocol", "all", "protocol to check: all, tcp, or udp")
@@ -108,7 +115,7 @@ func runCheck(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: portmap check [--no-docker] [--protocol all|tcp|udp] [--timeout 5s] <port>")
+		writeCheckUsage(os.Stderr)
 		return 2
 	}
 
@@ -223,4 +230,63 @@ func ownerName(entry portmap.Entry) string {
 	default:
 		return "unknown process"
 	}
+}
+
+func writeMainUsage(w io.Writer) {
+	fmt.Fprint(w, `portmap - unified view of listening ports, owning apps, Docker containers, and service labels
+
+Usage:
+  portmap [flags]
+  portmap check [flags] <port>
+
+Examples:
+  portmap
+  portmap --port 5432
+  portmap --watch
+  portmap --watch --interval 1s --port 8080
+  portmap --json --protocol tcp
+  portmap check 5432
+
+Commands:
+  check <port>    report whether one port is free or occupied
+
+Flags:
+  --json               print JSON instead of a table
+  --no-docker          skip Docker container port annotations
+  --port <port>        show only one listening port
+  --protocol <value>   protocol to show: all, tcp, or udp (default all)
+  --timeout <duration> maximum scan duration (default 5s)
+  --version            print version and exit
+  --watch              refresh the table until interrupted
+  --interval <duration>
+                       refresh interval for --watch (default 2s)
+
+Check exit codes:
+  0  port is free
+  1  port is occupied
+  2  bad input or scan error
+`)
+}
+
+func writeCheckUsage(w io.Writer) {
+	fmt.Fprint(w, `portmap check - report whether one port is free or occupied
+
+Usage:
+  portmap check [flags] <port>
+
+Examples:
+  portmap check 5432
+  portmap check --protocol tcp 8080
+  portmap check --no-docker 6379
+
+Flags:
+  --no-docker          skip Docker container annotations
+  --protocol <value>   protocol to check: all, tcp, or udp (default all)
+  --timeout <duration> maximum scan duration (default 5s)
+
+Exit codes:
+  0  port is free
+  1  port is occupied
+  2  bad input or scan error
+`)
 }
