@@ -2,7 +2,7 @@ class Portmap < Formula
   desc "Show listening ports with owning app, Docker container, and service labels"
   homepage "https://github.com/rohitshidid/Homebrew-portman"
   url "https://github.com/rohitshidid/Homebrew-portman.git",
-    tag: "v0.2.0"
+    tag: "v0.3.0"
   license "MIT"
   head "https://github.com/rohitshidid/Homebrew-portman.git", branch: "main"
 
