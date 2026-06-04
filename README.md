@@ -33,6 +33,8 @@ go install ./cmd/portmap
 ```sh
 portmap
 portmap --port 5432
+portmap --watch
+portmap check 5432
 portmap --json
 portmap --protocol tcp
 portmap --protocol udp --no-docker
@@ -40,12 +42,17 @@ portmap --protocol udp --no-docker
 
 Flags:
 
+- `check 5432`: report whether one port is free or occupied
 - `--json`: print JSON instead of a table
+- `--interval 2s`: refresh interval for watch mode
 - `--no-docker`: skip Docker annotations
 - `--port 5432`: show only one listening port
 - `--protocol all|tcp|udp`: filter rows by protocol
 - `--timeout 5s`: cap the scan duration
 - `--version`: print the build version
+- `--watch`: refresh the table until interrupted
+
+`portmap check <port>` returns `0` when the port is free and `1` when it is occupied, which makes it useful in shell scripts.
 
 ## Build
 
