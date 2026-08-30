@@ -1,0 +1,1319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>portmap — what is listening, and what owns it</title>
+<meta name="description" content="One table for listening ports, owning apps, Docker containers and known service labels. A small Go CLI for macOS and Linux, with a watch mode and a script-friendly port check.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta property="og:title" content="portmap — what is listening, and what owns it">
+<meta property="og:description" content="Listening ports, owning apps, Docker containers and service names — joined into one table, from the tools your machine already has.">
+<meta property="og:image" content="icon.svg">
+<meta property="og:type" content="website">
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root {
+  --ink:        #16181d;
+  --ink-soft:   rgba(22, 24, 29, .66);
+  --ink-faint:  rgba(22, 24, 29, .44);
+  --bg:         #ffffff;
+  --bg-tint:    #f6f7f9;
+  --line:       rgba(22, 24, 29, .10);
+  --line-soft:  rgba(22, 24, 29, .06);
+  --accent:      #0d94a4;
+  --accent-deep: #0b7c8c;
+  --blue:       #2563eb;
+  --green:      #0f8a5f;
+  --amber:      #b26a00;
+  --red:        #c2352b;
+  --shadow-sm:  0 1px 2px rgba(16,24,40,.05), 0 4px 14px rgba(16,24,40,.05);
+  --shadow-lg:  0 2px 6px rgba(16,24,40,.04), 0 24px 60px rgba(16,24,40,.13);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+          "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+.wrap   { width: min(1120px, 100% - 48px); margin-inline: auto; }
+.narrow { width: min(760px, 100% - 48px);  margin-inline: auto; }
+
+a { color: var(--accent-deep); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.028em; line-height: 1.06; }
+h1 { font-size: clamp(2.7rem, 7.2vw, 4.9rem); letter-spacing: -0.035em; }
+h2 { font-size: clamp(2rem, 4.6vw, 3.3rem); }
+h3 { font-size: 1.16rem; letter-spacing: -0.012em; line-height: 1.3; }
+
+.lede {
+  font-size: clamp(1.13rem, 2.1vw, 1.42rem);
+  font-weight: 300;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.lede strong { font-weight: 600; color: var(--ink); }
+
+code {
+  font-family: var(--mono);
+  font-size: .86em;
+  background: var(--bg-tint);
+  border: 1px solid var(--line-soft);
+  padding: .12em .42em;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- reveal */
+.reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  transition: opacity .75s cubic-bezier(.22,.61,.36,1),
+              transform .75s cubic-bezier(.22,.61,.36,1);
+  transition-delay: calc(var(--i, 0) * 90ms);
+  will-change: opacity, transform;
+}
+.reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+}
+
+/* ------------------------------------------------------------------- nav */
+.nav {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.76);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid transparent;
+  transition: border-color .3s ease;
+}
+.nav.stuck { border-bottom-color: var(--line); }
+.nav-in { display: flex; align-items: center; gap: 11px; height: 56px; }
+.nav-in img { width: 25px; height: 25px; border-radius: 7px; }
+.nav-name { font-weight: 600; font-size: 15px; letter-spacing: -0.015em; }
+.nav-ver { font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+           border: 1px solid var(--line); border-radius: 20px; padding: 1px 8px; }
+.nav-links { margin-left: auto; display: flex; align-items: center; gap: 26px; }
+.nav-links a { color: var(--ink-soft); font-size: 14px; font-weight: 450; }
+.nav-links a:hover { color: var(--ink); text-decoration: none; }
+.nav-links .btn { color: #fff; }
+@media (max-width: 820px) { .nav-links a.opt { display: none; } .nav-ver { display: none; } }
+
+/* --------------------------------------------------------------- buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  border-radius: 999px;
+  font-weight: 550;
+  letter-spacing: -0.011em;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform .18s ease, box-shadow .25s ease,
+              background-color .2s ease, border-color .2s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.btn:hover { text-decoration: none; }
+.btn-lg { font-size: 1.02rem; padding: 15px 30px; }
+.btn-sm { font-size: .85rem; padding: 7px 16px; }
+.btn-fill { background: var(--accent); color: #fff; box-shadow: 0 6px 20px rgba(13,148,164,.28); }
+.btn-fill:hover { background: var(--accent-deep); transform: translateY(-1.5px); box-shadow: 0 10px 26px rgba(13,148,164,.34); }
+.btn-ghost { background: rgba(22,24,29,.045); color: var(--ink); }
+.btn-ghost:hover { background: rgba(22,24,29,.08); transform: translateY(-1.5px); }
+.btn .arrow { transition: transform .2s ease; }
+.btn:hover .arrow { transform: translateX(2px); }
+
+/* ------------------------------------------------------------------ hero */
+.hero { position: relative; padding: clamp(56px, 8vw, 96px) 0 0; text-align: center; }
+.hero::before {
+  content: ""; position: absolute; inset: -220px 0 auto; height: 760px; z-index: -1;
+  background:
+    radial-gradient(680px 420px at 50% 12%, rgba(13,148,164,.15), transparent 68%),
+    radial-gradient(520px 360px at 78% 4%,  rgba(37,99,235,.10), transparent 66%),
+    radial-gradient(460px 340px at 20% 8%,  rgba(15,138,95,.09), transparent 66%);
+  pointer-events: none;
+}
+.hero-icon { width: 88px; height: 88px; border-radius: 20px; box-shadow: var(--shadow-lg); }
+.hero h1 { margin: 26px auto 0; max-width: 14ch; }
+.hero .lede { margin: 22px auto 0; max-width: 56ch; }
+.hero-cta { margin-top: 34px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.hero-note { margin-top: 16px; font-size: .82rem; color: var(--ink-faint); }
+
+/* ------------------------------------------------------- terminal window */
+.stage { margin-top: clamp(40px, 5.5vw, 68px); perspective: 1800px; }
+.win {
+  margin: 0 auto;
+  max-width: 900px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  transform: rotateX(4deg) scale(.99);
+  transform-origin: 50% 0;
+  transition: transform 1s cubic-bezier(.22,.61,.36,1);
+}
+.reveal.in .win, .win.flat { transform: none; }
+.win-bar {
+  display: flex; align-items: center; gap: 7px;
+  padding: 10px 14px; background: #f6f6f7; border-bottom: 1px solid var(--line);
+}
+.win-bar i { width: 11px; height: 11px; border-radius: 50%; background: #dcdce0; }
+.win-bar i:nth-child(1) { background: #ff5f57; }
+.win-bar i:nth-child(2) { background: #febc2e; }
+.win-bar i:nth-child(3) { background: #28c840; }
+.win-title { margin-left: 10px; font-size: 12px; color: var(--ink-faint); font-family: var(--mono); }
+
+.term {
+  background: #16181d;
+  color: #e6e8ec;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.85;
+  text-align: left;
+  padding: 20px 22px 24px;
+  min-height: 330px;
+  overflow-x: auto;
+}
+.term .ln { white-space: pre; }
+.term .ln:empty::before { content: "\00a0"; }  /* keep blank separator lines tall */
+.term .pr  { color: #8b91a3; }
+.term .cm  { color: #67e8f9; }
+.term .c   { color: #6f7686; }
+.term .ok  { color: #4ade80; }
+.term .warn{ color: #fbbf24; }
+.term .err { color: #f87171; }
+.term .hd  { color: #8b91a3; }
+.term .dim { color: #8b91a3; }
+.term .num { color: #fbbf24; }
+.term .cur {
+  display: inline-block; width: 8px; height: 15px; vertical-align: -3px;
+  background: #67e8f9; animation: blink 1.05s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .term .cur { animation: none; } }
+@media (max-width: 640px) { .term { font-size: 11px; padding: 16px 14px 20px; } }
+
+.term-hint {
+  display: flex; align-items: center; gap: 8px; justify-content: center;
+  margin-top: 14px; font-size: .78rem; color: var(--ink-faint);
+}
+.term-hint button {
+  font: inherit; font-size: .78rem; cursor: pointer; color: var(--ink-soft);
+  background: rgba(22,24,29,.045); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 13px; transition: background-color .2s ease;
+}
+.term-hint button:hover { background: rgba(22,24,29,.09); }
+
+/* --------------------------------------------------------------- sections */
+section { padding: clamp(72px, 10vw, 128px) 0; }
+section.tint { background: var(--bg-tint); }
+.eyebrow {
+  font-size: .8rem; font-weight: 650; letter-spacing: .085em; text-transform: uppercase;
+  color: var(--accent-deep); margin: 0 0 16px;
+}
+.center { text-align: center; }
+.center .lede { margin-inline: auto; max-width: 56ch; }
+.sec-head h2 { max-width: 19ch; }
+.center.sec-head h2 { margin-inline: auto; }
+.sec-head .lede { margin-top: 20px; }
+
+/* ----------------------------------------------------------------- stats */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.stat { padding: 30px 26px; background: #fff; border: 1px solid var(--line); border-radius: 18px; }
+section.tint .stat { box-shadow: var(--shadow-sm); }
+.stat b { display: block; font-size: 2.05rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
+.stat span { display: block; margin-top: 7px; font-size: .89rem; color: var(--ink-soft); line-height: 1.45; }
+
+/* ----------------------------------------------------------------- cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(272px, 1fr)); gap: 18px; margin-top: 54px; }
+.card {
+  padding: 30px 28px; background: #fff; border: 1px solid var(--line);
+  border-radius: 20px; box-shadow: var(--shadow-sm);
+  transition: transform .3s cubic-bezier(.22,.61,.36,1), box-shadow .3s ease;
+}
+.card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+.card .ico {
+  width: 40px; height: 40px; border-radius: 11px; margin-bottom: 18px;
+  display: grid; place-items: center; font-size: 19px;
+  background: linear-gradient(150deg, rgba(13,148,164,.14), rgba(37,99,235,.12));
+}
+.card p { margin: 9px 0 0; color: var(--ink-soft); font-size: .94rem; line-height: 1.58; }
+
+/* -------------------------------------------------------------- features */
+.feature { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(38px, 6vw, 84px); align-items: center; }
+.feature + .feature { margin-top: clamp(72px, 9vw, 124px); }
+.feature.flip .feature-text { order: 2; }
+.feature h3 { font-size: clamp(1.6rem, 3.2vw, 2.25rem); font-weight: 700; letter-spacing: -0.028em; }
+.feature p { margin: 18px 0 0; color: var(--ink-soft); font-size: 1.04rem; line-height: 1.6; font-weight: 300; }
+.feature p strong { font-weight: 600; color: var(--ink); }
+@media (max-width: 860px) {
+  .feature { grid-template-columns: 1fr; gap: 32px; }
+  .feature.flip .feature-text { order: 0; }
+}
+
+.mini {
+  background: #16181d; border-radius: 16px; box-shadow: var(--shadow-lg);
+  overflow: hidden; border: 1px solid rgba(255,255,255,.06);
+}
+.mini-bar {
+  display: flex; align-items: center; gap: 6px; padding: 9px 13px;
+  background: rgba(255,255,255,.045); border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.mini-bar i { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,.2); }
+.mini-bar span { margin-left: 8px; font-family: var(--mono); font-size: 11px; color: #8b91a3; }
+.mini pre {
+  margin: 0; padding: 16px 18px; background: none; box-shadow: none; border-radius: 0;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.9; color: #e6e8ec; overflow-x: auto;
+}
+.mini .pr { color: #8b91a3; } .mini .cm { color: #67e8f9; } .mini .c { color: #6f7686; }
+.mini .ok { color: #4ade80; } .mini .warn { color: #fbbf24; } .mini .err { color: #f87171; }
+.mini .hd { color: #8b91a3; } .mini .dim { color: #8b91a3; } .mini .num { color: #fbbf24; }
+
+/* ----------------------------------------------------------- try it live */
+.try {
+  margin-top: 50px; border: 1px solid var(--line); border-radius: 20px;
+  overflow: hidden; background: #fff; box-shadow: var(--shadow-lg);
+  display: grid; grid-template-columns: 1fr 1fr;
+}
+.try-left { padding: 30px 32px; }
+.try-left h3 { font-size: 1.12rem; }
+.try-left p { margin: 10px 0 0; color: var(--ink-soft); font-size: .94rem; line-height: 1.58; }
+.try-form { display: flex; gap: 9px; margin-top: 22px; }
+.try-form input {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 14px;
+  padding: 11px 15px; border: 1px solid var(--line); border-radius: 11px;
+  background: var(--bg-tint); color: var(--ink); outline: none;
+  transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
+}
+.try-form input:focus {
+  border-color: var(--accent); background: #fff;
+  box-shadow: 0 0 0 3px rgba(13,148,164,.14);
+}
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+.chip {
+  font: inherit; font-family: var(--mono); font-size: 12px; cursor: pointer;
+  background: var(--bg-tint); border: 1px solid var(--line); color: var(--ink-soft);
+  border-radius: 999px; padding: 5px 13px;
+  transition: background-color .18s ease, color .18s ease, border-color .18s ease;
+}
+.chip:hover { background: rgba(13,148,164,.10); color: var(--accent-deep); border-color: rgba(13,148,164,.28); }
+.try-right { background: #16181d; display: flex; flex-direction: column; }
+.try-out {
+  flex: 1; margin: 0; padding: 24px 26px;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.9;
+  color: #e6e8ec; overflow-x: auto; min-height: 250px; white-space: pre;
+}
+.try-out .pr { color: #8b91a3; } .try-out .cm { color: #67e8f9; }
+.try-out .ok { color: #4ade80; } .try-out .err { color: #f87171; }
+.try-out .dim { color: #8b91a3; } .try-out .warn { color: #fbbf24; }
+.try-exit {
+  padding: 13px 26px; border-top: 1px solid rgba(255,255,255,.07);
+  font-family: var(--mono); font-size: 12px; color: #9aa1b1;
+  display: flex; align-items: center; gap: 9px;
+}
+.try-exit b { font-weight: 700; }
+.try-exit .z0 { color: #4ade80; } .try-exit .z1 { color: #fbbf24; } .try-exit .z2 { color: #f87171; }
+@media (max-width: 820px) { .try { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------ command explorer */
+.explorer {
+  margin-top: 54px; display: grid; grid-template-columns: 268px 1fr;
+  border: 1px solid var(--line); border-radius: 20px; overflow: hidden;
+  background: #fff; box-shadow: var(--shadow-lg);
+}
+.ex-list { border-right: 1px solid var(--line); background: #fbfbfc; padding: 10px; overflow-y: auto; max-height: 440px; }
+.ex-item {
+  display: block; width: 100%; text-align: left; font: inherit; cursor: pointer;
+  background: none; border: 1px solid transparent; border-radius: 11px;
+  padding: 10px 13px; margin-bottom: 2px; transition: background-color .18s ease, border-color .18s ease;
+}
+.ex-item:hover { background: rgba(13,148,164,.07); }
+.ex-item.on { background: #fff; border-color: var(--line); box-shadow: var(--shadow-sm); }
+.ex-item b { display: block; font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.ex-item.on b { color: var(--accent-deep); }
+.ex-item span { display: block; margin-top: 2px; font-size: 12px; color: var(--ink-faint); line-height: 1.4; }
+.ex-body { background: #16181d; display: flex; flex-direction: column; }
+.ex-out {
+  flex: 1; margin: 0; padding: 22px 24px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.9;
+  color: #e6e8ec; overflow-x: auto; min-height: 320px;
+}
+.ex-out .pr { color: #8b91a3; } .ex-out .cm { color: #67e8f9; } .ex-out .c { color: #6f7686; }
+.ex-out .ok { color: #4ade80; } .ex-out .err { color: #f87171; } .ex-out .warn { color: #fbbf24; }
+.ex-out .hd { color: #8b91a3; } .ex-out .dim { color: #8b91a3; } .ex-out .num { color: #fbbf24; }
+.ex-note {
+  padding: 14px 24px; border-top: 1px solid rgba(255,255,255,.07);
+  font-size: 12.5px; color: #9aa1b1; line-height: 1.55; font-family: var(--sans);
+}
+.ex-note code { background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.09); color: #cbd2e0; }
+@media (max-width: 800px) {
+  .explorer { grid-template-columns: 1fr; }
+  .ex-list { border-right: 0; border-bottom: 1px solid var(--line); display: flex; gap: 6px; overflow-x: auto; max-height: none; }
+  .ex-item { flex: 0 0 auto; margin: 0; }
+  .ex-item span { display: none; }
+}
+
+/* ----------------------------------------------------------------- table */
+.tbl-wrap { margin-top: 50px; border: 1px solid var(--line); border-radius: 20px; overflow: hidden; background: #fff; box-shadow: var(--shadow-sm); }
+.tbl-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .95rem; min-width: 620px; }
+th, td { text-align: left; padding: 16px 22px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-faint); font-weight: 650; background: #fbfbfc; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr { transition: background-color .2s ease; }
+tbody tr:hover { background: #fbfbfc; }
+td.what { font-family: var(--mono); font-size: .84rem; font-weight: 600; white-space: nowrap; color: var(--accent-deep); }
+td .sub { display: block; margin-top: 4px; font-size: .86rem; color: var(--ink-faint); }
+td.code0 { font-family: var(--mono); font-weight: 700; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 9px; vertical-align: 1px; }
+.dot.g { background: var(--green); } .dot.a { background: var(--amber); } .dot.r { background: var(--red); }
+
+/* ------------------------------------------------------------ code block */
+.code { position: relative; margin: 26px 0 0; }
+.code pre {
+  margin: 0; padding: 22px 24px; border-radius: 16px;
+  background: #16181d; color: #e6e8ec; overflow-x: auto;
+  font-family: var(--mono); font-size: 13px; line-height: 1.8;
+  box-shadow: var(--shadow-sm);
+}
+.code pre code { background: none; border: 0; padding: 0; color: inherit; white-space: pre; font-size: inherit; }
+.code .c { color: #6f7686; }
+.code .k { color: #67e8f9; }
+.code .s { color: #7ee2b8; }
+.copy {
+  position: absolute; top: 12px; right: 12px;
+  font: inherit; font-size: 11.5px; font-weight: 550; letter-spacing: .01em;
+  color: #cbd2e0; background: rgba(255,255,255,.09);
+  border: 1px solid rgba(255,255,255,.12); border-radius: 8px;
+  padding: 5px 11px; cursor: pointer; opacity: 0;
+  transition: opacity .2s ease, background-color .2s ease, color .2s ease;
+}
+.code:hover .copy, .copy:focus-visible { opacity: 1; }
+.copy:hover { background: rgba(255,255,255,.17); color: #fff; }
+.copy.done { opacity: 1; background: rgba(74,222,128,.18); border-color: rgba(74,222,128,.35); color: #4ade80; }
+@media (hover: none) { .copy { opacity: 1; } }
+
+/* ---------------------------------------------------------------- steps */
+.steps { counter-reset: s; margin-top: 50px; display: grid; gap: 14px; }
+.step {
+  display: grid; grid-template-columns: 42px 1fr; gap: 20px; align-items: start;
+  padding: 26px 28px; background: #fff; border: 1px solid var(--line); border-radius: 18px;
+}
+.step::before {
+  counter-increment: s; content: counter(s);
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-size: .92rem; font-weight: 650;
+}
+.step h3 { font-size: 1.04rem; }
+.step p { margin: 7px 0 0; color: var(--ink-soft); font-size: .94rem; line-height: 1.55; }
+.step .code { margin-top: 14px; }
+.step .code pre { font-size: 12.5px; padding: 16px 18px; }
+
+.note {
+  margin-top: 30px; padding: 26px 30px; border-radius: 18px;
+  background: rgba(178,106,0,.055); border: 1px solid rgba(178,106,0,.18);
+}
+.note h3 { font-size: 1.02rem; }
+.note p { margin: 9px 0 0; color: var(--ink-soft); font-size: .93rem; line-height: 1.6; }
+
+/* ---------------------------------------------------------------- limits */
+.limits { margin-top: 50px; display: grid; gap: 12px; }
+.limit {
+  display: grid; grid-template-columns: 26px 1fr; gap: 16px; align-items: start;
+  padding: 20px 24px; background: #fff; border: 1px solid var(--line); border-radius: 16px;
+}
+.limit .x { color: var(--red); font-weight: 700; font-size: 1.05rem; line-height: 1.4; }
+.limit b { font-weight: 600; }
+.limit p { margin: 4px 0 0; color: var(--ink-soft); font-size: .93rem; line-height: 1.55; }
+
+/* -------------------------------------------------------------- pipeline */
+.pipe { margin-top: 54px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.pipe-step {
+  padding: 24px 24px; background: #fff; border: 1px solid var(--line); border-radius: 18px;
+  position: relative;
+}
+.pipe-step .n {
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  color: var(--accent-deep); text-transform: uppercase;
+}
+.pipe-step h3 { margin-top: 9px; font-size: 1.02rem; }
+.pipe-step p { margin: 7px 0 0; color: var(--ink-soft); font-size: .9rem; line-height: 1.55; }
+.pipe-step code { font-size: .8rem; }
+
+/* ------------------------------------------------------------ final cta */
+.final { text-align: center; }
+.final h2 { max-width: 17ch; margin-inline: auto; }
+.final .hero-cta { margin-top: 32px; }
+
+/* ---------------------------------------------------------------- footer */
+footer { padding: 54px 0 72px; border-top: 1px solid var(--line); background: var(--bg-tint); }
+.foot { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; font-size: .87rem; color: var(--ink-faint); }
+.foot a { color: var(--ink-soft); }
+.foot .sep { margin-left: auto; }
+.foot p { margin: 18px 0 0; width: 100%; line-height: 1.6; max-width: 74ch; }
+</style>
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <div class="wrap nav-in">
+    <img src="icon.svg" alt="">
+    <span class="nav-name">portmap</span>
+    <span class="nav-ver">v0.3.0</span>
+    <div class="nav-links">
+      <a href="#why" class="opt">Why</a>
+      <a href="#try" class="opt">Try it</a>
+      <a href="#commands" class="opt">Commands</a>
+      <a href="#how" class="opt">How it works</a>
+      <a href="#install" class="opt">Install</a>
+      <a href="https://github.com/rohitshidid/Homebrew-portman" class="opt">GitHub</a>
+      <a class="btn btn-sm btn-fill" href="#install">Install</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ------------------------------------------------------------------ hero -->
+<header class="hero">
+  <div class="wrap">
+    <img class="hero-icon reveal" src="icon.svg" alt="portmap icon">
+    <h1 class="reveal" style="--i:1">What's on that port?</h1>
+    <p class="lede reveal" style="--i:2">
+      One table for <strong>listening ports, the apps that own them, the Docker
+      containers behind them, and what the port is normally for</strong>. No more
+      piping <code>lsof</code> into <code>grep</code> and cross-referencing
+      <code>docker ps</code> by hand.
+    </p>
+    <div class="hero-cta reveal" style="--i:3">
+      <a class="btn btn-lg btn-fill" href="#install">Install with Homebrew</a>
+      <a class="btn btn-lg btn-ghost" href="https://github.com/rohitshidid/Homebrew-portman">
+        View the source <span class="arrow">→</span>
+      </a>
+    </div>
+    <p class="hero-note reveal" style="--i:4">
+      macOS &amp; Linux · zero dependencies · MIT licensed · v0.3.0
+    </p>
+  </div>
+
+  <div class="wrap stage reveal" style="--i:5">
+    <figure class="win" style="margin:0 auto">
+      <div class="win-bar"><i></i><i></i><i></i><span class="win-title">~ — zsh</span></div>
+      <div class="term" id="term" aria-label="An example portmap session"></div>
+    </figure>
+    <p class="term-hint reveal" style="--i:6">
+      <button type="button" id="replay">↻ Replay</button>
+      <span>every line above is output <code>portmap</code> actually prints</span>
+    </p>
+  </div>
+</header>
+
+<!-- ----------------------------------------------------------------- stats -->
+<section class="tint" style="padding-top:clamp(56px,7vw,84px);padding-bottom:clamp(56px,7vw,84px)">
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat reveal"><b>0</b><span>third-party dependencies — the standard library and nothing else</span></div>
+      <div class="stat reveal" style="--i:1"><b>4</b><span>sources joined: lsof, ss, netstat and docker</span></div>
+      <div class="stat reveal" style="--i:2"><b>5s</b><span>default scan timeout, so a hung tool can never hang you</span></div>
+      <div class="stat reveal" style="--i:3"><b>0/1/2</b><span>exit codes from <code>check</code>, built for shell scripts</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------- why -->
+<section id="why">
+  <div class="wrap">
+    <div class="narrow center sec-head" style="width:100%">
+      <p class="eyebrow reveal">The problem</p>
+      <h2 class="reveal" style="--i:1">Four tools, three answers, one question.</h2>
+      <p class="lede reveal" style="--i:2">
+        <code>lsof -i :3000</code> tells you a PID. <code>docker ps</code> tells you a
+        container. <code>/etc/services</code> tells you what the port is <em>for</em>.
+        None of them tell you all three, and <strong>the port you actually care about
+        is usually the one that belongs to something you forgot you started.</strong>
+      </p>
+    </div>
+
+    <div class="cards">
+      <div class="card reveal">
+        <div class="ico">📋</div>
+        <h3>One table, joined for you</h3>
+        <p>Port, protocol, bind address, app, PID, container and service name — assembled from every source your machine already has, in a single aligned table.</p>
+      </div>
+      <div class="card reveal" style="--i:1">
+        <div class="ico">🐳</div>
+        <h3>Docker included, not guessed</h3>
+        <p>Published container ports are matched to real listeners by port, protocol and bind address. A published port with no listener still shows up, so you can see what Docker <em>claims</em> versus what is actually bound.</p>
+      </div>
+      <div class="card reveal" style="--i:2">
+        <div class="ico">⚙️</div>
+        <h3>Made to be scripted</h3>
+        <p><code>portmap check 5432</code> exits <code>0</code> when the port is free and <code>1</code> when it isn't. Wrap it in an <code>if</code> and your dev script stops racing itself.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------------------------------------------------------------- try it -->
+<section class="tint" id="try">
+  <div class="wrap">
+    <div class="narrow center sec-head" style="width:100%">
+      <p class="eyebrow reveal">Try it</p>
+      <h2 class="reveal" style="--i:1">Check a port without installing anything.</h2>
+      <p class="lede reveal" style="--i:2">
+        This runs against a <strong>mock machine</strong>, right here in the page — a
+        laptop with Postgres, Redis in Docker, a Node dev server and a couple of
+        other things running. Type a port and see exactly what the real command
+        would print.
+      </p>
+    </div>
+
+    <div class="try reveal">
+      <div class="try-left">
+        <h3>portmap check &lt;port&gt;</h3>
+        <p>
+          One port in, one line out, and an exit code your shell can branch on. The
+          real thing scans your own machine — this one scans the fake one below.
+        </p>
+        <form class="try-form" id="tryForm">
+          <input id="tryInput" type="text" inputmode="numeric" value="5432"
+                 aria-label="Port number to check" autocomplete="off" spellcheck="false">
+          <button class="btn btn-sm btn-fill" type="submit" style="padding:11px 20px">Run</button>
+        </form>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="try-right">
+        <pre class="try-out" id="tryOut"></pre>
+        <div class="try-exit" id="tryExit"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- features -->
+<section>
+  <div class="wrap">
+
+    <div class="feature reveal">
+      <div class="feature-text">
+        <p class="eyebrow">portmap</p>
+        <h3>The default output is the whole product.</h3>
+        <p>
+          Run it with no arguments and you get every listening socket on the machine,
+          sorted, de-duplicated, and annotated. Rows that differ only by bind address
+          are <strong>merged into one</strong>, so a service listening on both
+          <code>127.0.0.1</code> and <code>::1</code> is one row, not two.
+        </p>
+        <p>
+          A <code>-</code> means genuinely nothing known — not a blank the tool
+          forgot to fill in.
+        </p>
+      </div>
+      <div class="mini">
+        <div class="mini-bar"><i></i><i></i><i></i><span>portmap</span></div>
+<pre><span class="hd">PORT   PROTO  ADDRESS    APP       PID   CONTAINER  SERVICE</span>
+<span class="num">3000</span>   tcp    *          node      4821  -          dev-http
+<span class="num">5432</span>   tcp    127.0.0.1  postgres  1234  pg         postgres
+<span class="num">6379</span>   tcp    *          docker    -     redis      redis
+<span class="num">7000</span>   udp    *          syncthing 9931  -          -
+<span class="num">8080</span>   tcp    127.0.0.1  java      5510  -          http-alt
+<span class="num">27017</span>  tcp    127.0.0.1  mongod    768   -          mongodb</pre>
+      </div>
+    </div>
+
+    <div class="feature flip reveal">
+      <div class="feature-text">
+        <p class="eyebrow">--watch</p>
+        <h3>Watch the table instead of re-running it.</h3>
+        <p>
+          <code>portmap --watch</code> clears the screen and redraws on an interval —
+          <code>--interval 1s</code> if two seconds is too slow. Start your stack in
+          one pane and <strong>watch the ports appear</strong> in the other.
+        </p>
+        <p>
+          Combine it with <code>--port</code> to keep one port under a microscope
+          while a container restarts, and with <code>--protocol</code> when UDP noise
+          is in your way.
+        </p>
+      </div>
+      <div class="mini">
+        <div class="mini-bar"><i></i><i></i><i></i><span>portmap --watch --interval 1s</span></div>
+<pre id="watchPane"></pre>
+      </div>
+    </div>
+
+    <div class="feature reveal">
+      <div class="feature-text">
+        <p class="eyebrow">check &amp; --json</p>
+        <h3>Built to be called by other things.</h3>
+        <p>
+          <code>check</code> prints one human line and returns a real exit code:
+          <strong>0 free, 1 occupied, 2 bad input</strong>. That is enough to gate a
+          dev server, a test harness, or a CI step without parsing any text at all.
+        </p>
+        <p>
+          When you do want the data, <code>--json</code> gives you every field —
+          including the container ID and the bind address list — indented and ready
+          for <code>jq</code>.
+        </p>
+      </div>
+      <div class="mini">
+        <div class="mini-bar"><i></i><i></i><i></i><span>a dev script</span></div>
+<pre><span class="c">#!/usr/bin/env bash</span>
+<span class="cm">if</span> portmap check <span class="num">3000</span> &gt;/dev/null; <span class="cm">then</span>
+  npm run dev
+<span class="cm">else</span>
+  <span class="cm">echo</span> <span class="ok">"port 3000 is taken:"</span>
+  portmap --port <span class="num">3000</span>
+  <span class="cm">exit</span> 1
+<span class="cm">fi</span>
+
+<span class="pr">$</span> <span class="cm">portmap --port 6379 --json | jq -r '.[].container'</span>
+redis</pre>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- commands -->
+<section class="tint" id="commands">
+  <div class="wrap">
+    <div class="narrow center sec-head" style="width:100%">
+      <p class="eyebrow reveal">Reference</p>
+      <h2 class="reveal" style="--i:1">Every invocation, with its output.</h2>
+      <p class="lede reveal" style="--i:2">
+        Pick one on the left. The panel shows what you type and what
+        <strong>portmap</strong> prints back.
+      </p>
+    </div>
+
+    <div class="explorer reveal">
+      <div class="ex-list" id="exList" role="tablist" aria-label="portmap commands"></div>
+      <div class="ex-body">
+        <pre class="ex-out" id="exOut"></pre>
+        <div class="ex-note" id="exNote"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ----------------------------------------------------------------- flags -->
+<section>
+  <div class="wrap">
+    <div class="narrow center sec-head" style="width:100%">
+      <p class="eyebrow reveal">Flags</p>
+      <h2 class="reveal" style="--i:1">Eight flags. You will use two.</h2>
+    </div>
+
+    <div class="tbl-wrap reveal">
+      <div class="tbl-scroll">
+        <table>
+          <thead><tr><th>Flag</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td class="what">--port &lt;port&gt;</td><td>Show only one listening port.<span class="sub">portmap --port 5432</span></td></tr>
+            <tr><td class="what">--protocol &lt;value&gt;</td><td>Filter rows by protocol: <code>all</code>, <code>tcp</code> or <code>udp</code>. Default <code>all</code>.</td></tr>
+            <tr><td class="what">--json</td><td>Print JSON instead of a table — indented, with the full address list, container ID and user.</td></tr>
+            <tr><td class="what">--no-docker</td><td>Skip the <code>docker ps</code> call entirely. Faster, and quiet on machines without Docker.</td></tr>
+            <tr><td class="what">--watch</td><td>Clear and redraw the table until interrupted. Not compatible with <code>--json</code>.</td></tr>
+            <tr><td class="what">--interval &lt;duration&gt;</td><td>Refresh interval for <code>--watch</code>. Default <code>2s</code>. Accepts <code>500ms</code>, <code>1s</code>, <code>1m</code>.</td></tr>
+            <tr><td class="what">--timeout &lt;duration&gt;</td><td>Cap the whole scan. Default <code>5s</code>. A wedged <code>lsof</code> gets cancelled rather than hanging your terminal.</td></tr>
+            <tr><td class="what">--version</td><td>Print the build version and exit.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="narrow center sec-head" style="width:100%;margin-top:clamp(64px,8vw,96px)">
+      <p class="eyebrow reveal">Exit codes</p>
+      <h2 class="reveal" style="--i:1">Three codes, from <code style="font-size:.55em">check</code>.</h2>
+    </div>
+
+    <div class="tbl-wrap reveal" style="margin-top:34px">
+      <div class="tbl-scroll">
+        <table>
+          <thead><tr><th>Code</th><th>Meaning</th><th>Typical use</th></tr></thead>
+          <tbody>
+            <tr><td class="code0"><span class="dot g"></span>0</td><td>The port is free.</td><td>Start the service.</td></tr>
+            <tr><td class="code0"><span class="dot a"></span>1</td><td>The port is occupied.</td><td>Print the owner and bail out, or pick another port.</td></tr>
+            <tr><td class="code0"><span class="dot r"></span>2</td><td>Bad input, or the scan itself failed.</td><td>A real error — do not treat it as "free".</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------- how -->
+<section class="tint" id="how">
+  <div class="wrap">
+    <div class="narrow center sec-head" style="width:100%">
+      <p class="eyebrow reveal">Under the hood</p>
+      <h2 class="reveal" style="--i:1">It doesn't reinvent the socket table.</h2>
+      <p class="lede reveal" style="--i:2">
+        Your machine already ships tools that know exactly what is listening, and they
+        are maintained by people who care about it full time. <strong>portmap asks
+        them</strong>, then does the boring join nobody wants to do by hand.
+      </p>
+    </div>
+
+    <div class="pipe">
+      <div class="pipe-step reveal">
+        <div class="n">Step 01</div>
+        <h3>Enumerate</h3>
+        <p>macOS: <code>lsof</code>, once for TCP listeners and once for UDP. Linux: <code>ss</code> first, falling back to <code>netstat</code>, then <code>lsof</code> — whichever is actually installed.</p>
+      </div>
+      <div class="pipe-step reveal" style="--i:1">
+        <div class="n">Step 02</div>
+        <h3>Annotate</h3>
+        <p><code>docker ps</code> supplies published ports, container names and IDs. Each one is matched to a listener by port, protocol and a compatible bind address — wildcards included.</p>
+      </div>
+      <div class="pipe-step reveal" style="--i:2">
+        <div class="n">Step 03</div>
+        <h3>Label</h3>
+        <p>A built-in table of common services is overlaid with your real <code>/etc/services</code>, so <code>5432</code> reads <code>postgres</code> and your site-local entries still win.</p>
+      </div>
+      <div class="pipe-step reveal" style="--i:3">
+        <div class="n">Step 04</div>
+        <h3>Merge &amp; sort</h3>
+        <p>Rows identical but for their bind address are collapsed into one with a merged address list, filters are applied, and the result is sorted before it reaches your terminal.</p>
+      </div>
+    </div>
+
+    <div class="narrow" style="width:min(760px,100%);margin-top:54px">
+      <div class="note reveal">
+        <h3>Every command goes through one interface</h3>
+        <p>
+          All four external calls run behind a single <code>Runner</code> interface,
+          which is why the parsers for <code>lsof</code>, <code>ss</code>,
+          <code>netstat</code> and <code>docker</code> are covered by tests against
+          canned fixtures rather than whatever happens to be running on the machine
+          at the time. Every call also inherits the <code>--timeout</code> context, so
+          nothing can block forever.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------------- install -->
+<section id="install">
+  <div class="wrap">
+    <div class="narrow center sec-head" style="width:100%">
+      <p class="eyebrow reveal">Getting started</p>
+      <h2 class="reveal" style="--i:1">Two commands, and there is nothing to configure.</h2>
+    </div>
+
+    <div class="narrow steps" style="width:min(760px,100%)">
+      <div class="step reveal">
+        <div>
+          <h3>Tap the repository</h3>
+          <p>The repository is named <code>Homebrew-portman</code>, so Homebrew's shorthand for it is <code>rohitshidid/portman</code>.</p>
+          <div class="code">
+            <button class="copy" type="button">Copy</button>
+<pre><code><span class="k">brew</span> tap rohitshidid/portman</code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="step reveal" style="--i:1">
+        <div>
+          <h3>Install</h3>
+          <p>The formula builds the <code>v0.3.0</code> tag with Go, which Homebrew pulls in as a build-only dependency and does not leave behind.</p>
+          <div class="code">
+            <button class="copy" type="button">Copy</button>
+<pre><code><span class="k">brew</span> install rohitshidid/portman/portmap
+<span class="k">portmap</span> --version</code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="step reveal" style="--i:2">
+        <div>
+          <h3>Run it</h3>
+          <p>No config file, no daemon, no first-run setup. Every command is a one-shot scan of the machine you are on.</p>
+          <div class="code">
+            <button class="copy" type="button">Copy</button>
+<pre><code><span class="k">portmap</span>
+<span class="k">portmap</span> check 3000
+<span class="k">portmap</span> --watch</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="narrow" style="width:min(760px,100%)">
+      <p class="lede reveal" style="margin-top:54px;font-size:1.05rem">
+        Or build it from source — Go 1.22, no modules to download:
+      </p>
+      <div class="code reveal">
+        <button class="copy" type="button">Copy</button>
+<pre><code><span class="k">git</span> clone https://github.com/rohitshidid/Homebrew-portman.git
+<span class="k">cd</span> Homebrew-portman
+<span class="k">go</span> test ./...
+<span class="k">go</span> build -o portmap ./cmd/portmap
+./portmap --help</code></pre>
+      </div>
+
+      <div class="note reveal">
+        <h3>A note on what you can see</h3>
+        <p>
+          Without <code>sudo</code>, the OS will not tell you which process owns a
+          socket belonging to <strong>another user</strong>. The port still appears —
+          the <code>APP</code> and <code>PID</code> columns just read <code>-</code>.
+          If a row looks suspiciously empty, re-run with <code>sudo portmap</code> and
+          it will fill in.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------------------------------------------------------------- limits -->
+<section class="tint">
+  <div class="wrap">
+    <div class="narrow center sec-head" style="width:100%">
+      <p class="eyebrow reveal">Honestly</p>
+      <h2 class="reveal" style="--i:1">Four things it is not.</h2>
+    </div>
+
+    <div class="narrow limits" style="width:min(760px,100%)">
+      <div class="limit reveal">
+        <span class="x">✕</span>
+        <div>
+          <b>It is not a port scanner.</b>
+          <p>It describes sockets on the machine it is running on. It does not probe anything over the network, and pointing it at someone else's host is not a thing it can do.</p>
+        </div>
+      </div>
+      <div class="limit reveal" style="--i:1">
+        <span class="x">✕</span>
+        <div>
+          <b>It is not a firewall or a manager.</b>
+          <p>It reports. It does not open ports, close them, or stop the process holding one — that is still <code>kill</code> or <code>docker stop</code>, on purpose.</p>
+        </div>
+      </div>
+      <div class="limit reveal" style="--i:2">
+        <span class="x">✕</span>
+        <div>
+          <b>It is not a daemon.</b>
+          <p>There is no background service and no history. <code>--watch</code> is a loop around the same one-shot scan you get from running the command yourself.</p>
+        </div>
+      </div>
+      <div class="limit reveal" style="--i:3">
+        <span class="x">✕</span>
+        <div>
+          <b>It is only as good as its sources.</b>
+          <p>If <code>lsof</code>, <code>ss</code> and <code>netstat</code> are all missing, there is nothing to enumerate. If Docker is not running, the container column is simply empty — the scan still works.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------- final cta -->
+<section class="final">
+  <div class="wrap">
+    <h2 class="reveal">Stop grepping <code style="font-size:.55em">lsof</code>.</h2>
+    <p class="lede reveal" style="--i:1">Free, open source, and a single static binary.</p>
+    <div class="hero-cta reveal" style="--i:2">
+      <a class="btn btn-lg btn-fill" href="#install">Install with Homebrew</a>
+      <a class="btn btn-lg btn-ghost" href="https://github.com/rohitshidid/Homebrew-portman">
+        Read the code <span class="arrow">→</span>
+      </a>
+    </div>
+    <p class="hero-note reveal" style="--i:3">macOS &amp; Linux · MIT licensed · v0.3.0</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <a href="https://github.com/rohitshidid/Homebrew-portman">GitHub</a>
+    <a href="https://github.com/rohitshidid/Homebrew-portman/releases">Releases</a>
+    <a href="https://github.com/rohitshidid/Homebrew-portman/blob/main/Formula/portmap.rb">Homebrew formula</a>
+    <a href="https://github.com/rohitshidid/Homebrew-portman/blob/main/ROADMAP.md">Roadmap</a>
+    <a href="https://github.com/rohitshidid/Homebrew-portman/issues">Report an issue</a>
+    <span class="sep">MIT licensed</span>
+    <p>
+      Also by the same author:
+      <a href="https://rohitshidid.github.io/bak/">bak</a> — per-file snapshots, diff and
+      restore for the files git never sees.
+    </p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------------------------------------------------------- reveal */
+  var items = document.querySelectorAll('.reveal');
+  if (!('IntersectionObserver' in window) || reduced) {
+    items.forEach(function (el) { el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        e.target.classList.add('in');
+        io.unobserve(e.target);
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.06 });
+    items.forEach(function (el) { io.observe(el); });
+  }
+
+  var nav = document.getElementById('nav');
+  var onScroll = function () { nav.classList.toggle('stuck', window.scrollY > 8); };
+  addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  /* ------------------------------------------------------ copy buttons */
+  document.querySelectorAll('.code').forEach(function (block) {
+    var btn = block.querySelector('.copy');
+    var code = block.querySelector('code');
+    if (!btn || !code) return;
+    btn.addEventListener('click', function () {
+      var text = code.innerText;
+      var done = function () {
+        btn.textContent = 'Copied';
+        btn.classList.add('done');
+        setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallback(text, done); });
+      } else { fallback(text, done); }
+    });
+  });
+  function fallback(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:absolute;left:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* nothing sensible to do */ }
+    document.body.removeChild(ta);
+  }
+
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  /* ------------------------------------------------ the mock machine */
+  // One fixture, shared by the hero demo, the try-it box and the watch pane,
+  // so every number on this page agrees with every other one.
+  var HEADER = 'PORT   PROTO  ADDRESS    APP       PID   CONTAINER  SERVICE';
+  var machine = [
+    { port: 3000,  proto: 'tcp', addr: '*',         app: 'node',      pid: '4821', ctr: '-',     svc: 'dev-http' },
+    { port: 5432,  proto: 'tcp', addr: '127.0.0.1', app: 'postgres',  pid: '1234', ctr: 'pg',    svc: 'postgres' },
+    { port: 6379,  proto: 'tcp', addr: '*',         app: 'docker',    pid: '-',    ctr: 'redis', svc: 'redis' },
+    { port: 7000,  proto: 'udp', addr: '*',         app: 'syncthing', pid: '9931', ctr: '-',     svc: '-' },
+    { port: 8080,  proto: 'tcp', addr: '127.0.0.1', app: 'java',      pid: '5510', ctr: '-',     svc: 'http-alt' },
+    { port: 27017, proto: 'tcp', addr: '127.0.0.1', app: 'mongod',    pid: '768',  ctr: '-',     svc: 'mongodb' }
+  ];
+  function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(1, n - s.length)); }
+  function row(r) {
+    return '<span class="num">' + pad(r.port, 7).trimEnd() + '</span>' +
+           ' '.repeat(7 - String(r.port).length) +
+           pad(r.proto, 7) + pad(r.addr, 11) + pad(r.app, 10) +
+           pad(r.pid, 6) + pad(r.ctr, 11) + r.svc;
+  }
+  function table(rows) {
+    return ['<span class="hd">' + HEADER + '</span>'].concat(rows.map(row));
+  }
+
+  /* ------------------------------------------------- hero terminal demo */
+  var session = [
+    { cmd: 'portmap', out: table(machine) },
+    { cmd: 'portmap check 5432',
+      out: ['5432 is in use by postgres, pid 1234, container pg'] },
+    { cmd: 'portmap --port 6379 --json',
+      out: ['[',
+            '  {',
+            '    <span class="cm">"port"</span>: <span class="num">6379</span>,',
+            '    <span class="cm">"protocol"</span>: <span class="ok">"tcp"</span>,',
+            '    <span class="cm">"addresses"</span>: [<span class="ok">"*"</span>],',
+            '    <span class="cm">"app"</span>: <span class="ok">"docker"</span>,',
+            '    <span class="cm">"container"</span>: <span class="ok">"redis"</span>,',
+            '    <span class="cm">"service"</span>: <span class="ok">"redis"</span>',
+            '  }',
+            ']'] }
+  ];
+
+  var term = document.getElementById('term');
+  var replay = document.getElementById('replay');
+  var timers = [];
+  function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+  function wait(ms) { return new Promise(function (r) { timers.push(setTimeout(r, ms)); }); }
+  function line(html) {
+    var el = document.createElement('div');
+    el.className = 'ln';
+    el.innerHTML = html;
+    term.appendChild(el);
+    return el;
+  }
+  function prompt() { return '<span class="pr">$</span> '; }
+
+  var runId = 0;
+  async function play() {
+    clearTimers();
+    var mine = ++runId;
+    term.innerHTML = '';
+    for (var i = 0; i < session.length; i++) {
+      var step = session[i];
+      var el = line(prompt() + '<span class="cm"></span><span class="cur"></span>');
+      var target = el.querySelector('.cm');
+      var cursor = el.querySelector('.cur');
+      for (var c = 0; c < step.cmd.length; c++) {
+        if (mine !== runId) return;
+        target.innerHTML = esc(step.cmd.slice(0, c + 1));
+        await wait(step.cmd[c] === ' ' ? 46 : 26);
+      }
+      await wait(340);
+      if (mine !== runId) return;
+      cursor.remove();
+      for (var o = 0; o < step.out.length; o++) {
+        if (mine !== runId) return;
+        line(step.out[o]);
+        await wait(70);
+      }
+      if (i < session.length - 1) { line(''); await wait(700); }
+    }
+    if (mine !== runId) return;
+    line(prompt() + '<span class="cur"></span>');
+  }
+
+  function renderAll() {
+    term.innerHTML = '';
+    session.forEach(function (step, i) {
+      line(prompt() + '<span class="cm">' + esc(step.cmd) + '</span>');
+      step.out.forEach(function (o) { line(o); });
+      if (i < session.length - 1) line('');
+    });
+  }
+
+  if (reduced) {
+    renderAll();
+    replay.style.display = 'none';
+  } else {
+    var started = false;
+    var start = function () { if (!started) { started = true; play(); } };
+    if ('IntersectionObserver' in window) {
+      var tio = new IntersectionObserver(function (es) {
+        es.forEach(function (e) { if (e.isIntersecting) { start(); tio.disconnect(); } });
+      }, { threshold: 0.25 });
+      tio.observe(term);
+      // Belt and braces: if the observer never fires, do not leave it blank.
+      setTimeout(start, 2500);
+    } else { start(); }
+    replay.addEventListener('click', function () { started = true; play(); });
+  }
+
+  /* ------------------------------------------------------ try it: check */
+  var tryForm  = document.getElementById('tryForm');
+  var tryInput = document.getElementById('tryInput');
+  var tryOut   = document.getElementById('tryOut');
+  var tryExit  = document.getElementById('tryExit');
+  var chips    = document.getElementById('chips');
+
+  [3000, 5432, 6379, 8080, 9000, 27017].forEach(function (p) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.textContent = p;
+    b.addEventListener('click', function () { tryInput.value = p; runCheck(); });
+    chips.appendChild(b);
+  });
+
+  function describeOwner(r) {
+    var parts = [r.app === 'docker' && r.ctr !== '-' ? 'docker' : r.app];
+    if (r.pid !== '-') parts.push('pid ' + r.pid);
+    if (r.ctr !== '-') parts.push('container ' + r.ctr);
+    return parts.join(', ');
+  }
+
+  function runCheck() {
+    var raw = tryInput.value.trim();
+    var n = Number(raw);
+    var out, code;
+
+    if (raw === '' || !/^\d+$/.test(raw)) {
+      out = '<span class="pr">$</span> <span class="cm">portmap check ' + esc(raw || '') + '</span>\n' +
+            '<span class="err">portmap check: invalid port "' + esc(raw) + '"</span>';
+      code = 2;
+    } else if (n < 1 || n > 65535) {
+      out = '<span class="pr">$</span> <span class="cm">portmap check ' + n + '</span>\n' +
+            '<span class="err">portmap check: port must be between 1 and 65535</span>';
+      code = 2;
+    } else {
+      var hit = machine.filter(function (r) { return r.port === n; });
+      if (hit.length) {
+        out = '<span class="pr">$</span> <span class="cm">portmap check ' + n + '</span>\n' +
+              '<span class="warn">' + n + ' is in use by ' + describeOwner(hit[0]) + '</span>\n' +
+              '\n<span class="dim">$ portmap --port ' + n + '</span>\n' +
+              '<span class="dim">' + HEADER + '</span>\n' + row(hit[0]);
+        code = 1;
+      } else {
+        out = '<span class="pr">$</span> <span class="cm">portmap check ' + n + '</span>\n' +
+              '<span class="ok">' + n + ' is free</span>\n' +
+              '\n<span class="dim">nothing is listening — go ahead and bind it</span>';
+        code = 0;
+      }
+    }
+
+    tryOut.innerHTML = out;
+    var label = code === 0 ? 'the port is free'
+              : code === 1 ? 'the port is occupied'
+              : 'bad input or scan error';
+    tryExit.innerHTML = '<span>echo $?</span> <b class="z' + code + '">' + code + '</b>' +
+                        '<span class="dim"> — ' + label + '</span>';
+    if (!reduced) {
+      tryOut.animate(
+        [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 240, easing: 'cubic-bezier(.22,.61,.36,1)' }
+      );
+    }
+  }
+  tryForm.addEventListener('submit', function (e) { e.preventDefault(); runCheck(); });
+  tryInput.addEventListener('input', runCheck);
+  runCheck();
+
+  /* --------------------------------------------------------- watch pane */
+  // A stand-in for --watch: the header clock ticks and a container comes and
+  // goes, which is exactly what the real thing looks like while a stack boots.
+  var watchPane = document.getElementById('watchPane');
+  var extra = { port: 9200, proto: 'tcp', addr: '*', app: 'docker', pid: '-', ctr: 'elastic', svc: 'elasticsearch' };
+  var tick = 0;
+
+  function clockAt(i) {
+    var base = 14 * 3600 + 2 * 60 + 9;
+    var t = base + i;
+    var h = Math.floor(t / 3600) % 24, m = Math.floor(t / 60) % 60, s = t % 60;
+    return [h, m, s].map(function (v) { return String(v).padStart(2, '0'); }).join(':');
+  }
+  function drawWatch(i) {
+    var rows = machine.slice();
+    if (i % 6 >= 3) {
+      rows.push(extra);
+      rows.sort(function (a, b) { return a.port - b.port; });
+    }
+    watchPane.innerHTML =
+      '<span class="dim">portmap watch - updated ' + clockAt(i) +
+      ' - refresh 1s - Ctrl-C to stop</span>\n\n' + table(rows).join('\n');
+  }
+  drawWatch(0);
+  if (!reduced && 'IntersectionObserver' in window) {
+    var wio = new IntersectionObserver(function (es) {
+      es.forEach(function (e) {
+        if (e.isIntersecting) {
+          if (!watchPane.dataset.on) {
+            watchPane.dataset.on = '1';
+            setInterval(function () { drawWatch(++tick); }, 1000);
+          }
+        }
+      });
+    }, { threshold: 0.3 });
+    wio.observe(watchPane);
+  }
+
+  /* -------------------------------------------------- command explorer */
+  var commands = [
+    { name: 'portmap', desc: 'Everything that is listening',
+      body: ['<span class="pr">$</span> <span class="cm">portmap</span>'].concat(table(machine)),
+      note: 'The default. Rows are de-duplicated and sorted, and a <code>-</code> means nothing is known — a container-only port shows <code>docker</code> as the app with no PID.' },
+
+    { name: 'portmap --port', desc: 'One port only',
+      body: ['<span class="pr">$</span> <span class="cm">portmap --port 5432</span>']
+              .concat(table(machine.filter(function (r) { return r.port === 5432; })))
+              .concat(['', '<span class="pr">$</span> <span class="cm">portmap --port 9000</span>'])
+              .concat(['<span class="hd">' + HEADER + '</span>']),
+      note: 'A port with nothing on it prints the header and no rows — the same shape of output, just empty. For a yes/no answer with an exit code, use <code>check</code> instead.' },
+
+    { name: 'portmap check', desc: 'Free or occupied, with an exit code',
+      body: ['<span class="pr">$</span> <span class="cm">portmap check 5432</span>',
+             '<span class="warn">5432 is in use by postgres, pid 1234, container pg</span>',
+             '<span class="pr">$</span> <span class="cm">echo $?</span>',
+             '<span class="warn">1</span>',
+             '',
+             '<span class="pr">$</span> <span class="cm">portmap check 9000</span>',
+             '<span class="ok">9000 is free</span>',
+             '<span class="pr">$</span> <span class="cm">echo $?</span>',
+             '<span class="ok">0</span>'],
+      note: 'The owner line names the app, the PID and the container when each is known. <code>check</code> also accepts <code>--protocol</code>, <code>--no-docker</code> and <code>--timeout</code>.' },
+
+    { name: 'portmap --watch', desc: 'Redraw on an interval',
+      body: ['<span class="pr">$</span> <span class="cm">portmap --watch --interval 1s</span>',
+             '<span class="dim">portmap watch - updated 14:02:11 - refresh 1s - Ctrl-C to stop</span>',
+             ''].concat(table(machine)),
+      note: 'Clears the screen and redraws until you interrupt it. <code>--watch</code> and <code>--json</code> cannot be combined — the command exits with <code>2</code> and says so.' },
+
+    { name: 'portmap --json', desc: 'Machine-readable output',
+      body: ['<span class="pr">$</span> <span class="cm">portmap --port 6379 --json</span>',
+             '[',
+             '  {',
+             '    <span class="cm">"port"</span>: <span class="num">6379</span>,',
+             '    <span class="cm">"protocol"</span>: <span class="ok">"tcp"</span>,',
+             '    <span class="cm">"addresses"</span>: [<span class="ok">"*"</span>],',
+             '    <span class="cm">"app"</span>: <span class="ok">"docker"</span>,',
+             '    <span class="cm">"container"</span>: <span class="ok">"redis"</span>,',
+             '    <span class="cm">"container_id"</span>: <span class="ok">"9f2c1b3d4e5a"</span>,',
+             '    <span class="cm">"service"</span>: <span class="ok">"redis"</span>',
+             '  }',
+             ']'],
+      note: 'Indented JSON, always an array. Empty fields are omitted rather than sent as empty strings, so <code>jq</code> filters stay simple.' },
+
+    { name: 'portmap --protocol', desc: 'TCP or UDP only',
+      body: ['<span class="pr">$</span> <span class="cm">portmap --protocol udp</span>']
+              .concat(table(machine.filter(function (r) { return r.proto === 'udp'; })))
+              .concat(['',
+                       '<span class="pr">$</span> <span class="cm">portmap --protocol tcp --no-docker</span>'])
+              .concat(table(machine.filter(function (r) { return r.proto === 'tcp' && r.ctr === '-'; }))),
+      note: 'Accepts <code>all</code>, <code>tcp</code> or <code>udp</code>. Pairing it with <code>--no-docker</code> skips the <code>docker ps</code> call, which is noticeably faster on a machine where Docker is not running.' }
+  ];
+
+  var exList = document.getElementById('exList');
+  var exOut  = document.getElementById('exOut');
+  var exNote = document.getElementById('exNote');
+
+  commands.forEach(function (c, i) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ex-item' + (i === 0 ? ' on' : '');
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
+    b.innerHTML = '<b>' + esc(c.name) + '</b><span>' + c.desc + '</span>';
+    b.addEventListener('click', function () {
+      exList.querySelectorAll('.ex-item').forEach(function (el) {
+        el.classList.remove('on'); el.setAttribute('aria-selected', 'false');
+      });
+      b.classList.add('on');
+      b.setAttribute('aria-selected', 'true');
+      showCommand(i);
+    });
+    exList.appendChild(b);
+  });
+
+  function showCommand(i) {
+    exOut.innerHTML = commands[i].body.join('\n');
+    exNote.innerHTML = commands[i].note;
+    if (!reduced) {
+      exOut.animate(
+        [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 260, easing: 'cubic-bezier(.22,.61,.36,1)' }
+      );
+    }
+  }
+  showCommand(0);
+})();
+</script>
+
+</body>
+</html>

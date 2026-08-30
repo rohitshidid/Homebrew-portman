@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="portmap">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12b3c4"/>
+      <stop offset="1" stop-color="#0b7c8c"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".24"/>
+      <stop offset=".58" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="29" fill="url(#g)"/>
+  <rect width="128" height="128" rx="29" fill="url(#sheen)"/>
+
+  <!-- the table: a port, and what owns it -->
+  <g fill="#fff">
+    <rect x="24" y="28" width="20" height="9" rx="4.5" opacity=".55"/>
+    <rect x="52" y="28" width="52" height="9" rx="4.5" opacity=".3"/>
+
+    <rect x="24" y="48" width="20" height="9" rx="4.5"/>
+    <rect x="52" y="48" width="40" height="9" rx="4.5" opacity=".62"/>
+
+    <rect x="24" y="68" width="20" height="9" rx="4.5" opacity=".55"/>
+    <rect x="52" y="68" width="46" height="9" rx="4.5" opacity=".3"/>
+  </g>
+
+  <!-- in-use marker -->
+  <circle cx="88" cy="92" r="22" fill="#fff"/>
+  <circle cx="88" cy="92" r="9.5" fill="#0b7c8c"/>
+  <circle cx="88" cy="92" r="16" fill="none" stroke="#0b7c8c" stroke-width="4" opacity=".38"/>
+</svg>
