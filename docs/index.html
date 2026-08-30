@@ -186,8 +186,10 @@ code {
   line-height: 1.85;
   text-align: left;
   padding: 20px 22px 24px;
-  min-height: 330px;
-  overflow-x: auto;
+  /* Fixed, so a growing session scrolls inside the window instead of
+     pushing every section below it further down the page. */
+  height: 430px;
+  overflow: auto;
 }
 .term .ln { white-space: pre; }
 .term .ln:empty::before { content: "\00a0"; }  /* keep blank separator lines tall */
@@ -206,7 +208,7 @@ code {
 }
 @keyframes blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .term .cur { animation: none; } }
-@media (max-width: 640px) { .term { font-size: 11px; padding: 16px 14px 20px; } }
+@media (max-width: 640px) { .term { font-size: 11px; padding: 16px 14px 20px; height: 350px; } }
 
 .term-hint {
   display: flex; align-items: center; gap: 8px; justify-content: center;
@@ -283,6 +285,9 @@ section.tint .stat { box-shadow: var(--shadow-sm); }
 .mini .pr { color: #8b91a3; } .mini .cm { color: #67e8f9; } .mini .c { color: #6f7686; }
 .mini .ok { color: #4ade80; } .mini .warn { color: #fbbf24; } .mini .err { color: #f87171; }
 .mini .hd { color: #8b91a3; } .mini .dim { color: #8b91a3; } .mini .num { color: #fbbf24; }
+/* Reserve the tallest frame: the watch demo gains a row when a container
+   appears, and must not nudge the section around it. */
+#watchPane { min-height: 252px; }
 
 /* ----------------------------------------------------------- try it live */
 .try {
@@ -318,6 +323,8 @@ section.tint .stat { box-shadow: var(--shadow-sm); }
   font-family: var(--mono); font-size: 12.5px; line-height: 1.9;
   color: #e6e8ec; overflow-x: auto; min-height: 250px; white-space: pre;
 }
+.try-out { transition: opacity .2s ease; }
+.try-out.stale { opacity: .38; }
 .try-out .pr { color: #8b91a3; } .try-out .cm { color: #67e8f9; }
 .try-out .ok { color: #4ade80; } .try-out .err { color: #f87171; }
 .try-out .dim { color: #8b91a3; } .try-out .warn { color: #fbbf24; }
@@ -1058,6 +1065,7 @@ redis</pre>
     el.className = 'ln';
     el.innerHTML = html;
     term.appendChild(el);
+    term.scrollTop = term.scrollHeight;   // follow the output, like a real terminal
     return el;
   }
   function prompt() { return '<span class="pr">$</span> '; }
@@ -1129,7 +1137,7 @@ redis</pre>
     b.type = 'button';
     b.className = 'chip';
     b.textContent = p;
-    b.addEventListener('click', function () { tryInput.value = p; runCheck(); });
+    b.addEventListener('click', function () { tryInput.value = p; markStale(); tryInput.focus(); });
     chips.appendChild(b);
   });
 
@@ -1140,8 +1148,12 @@ redis</pre>
     return parts.join(', ');
   }
 
+  var shown = null;   // the input that produced what is currently on the panel
+
   function runCheck() {
     var raw = tryInput.value.trim();
+    shown = raw;
+    tryOut.classList.remove('stale');
     var n = Number(raw);
     var out, code;
 
@@ -1182,8 +1194,16 @@ redis</pre>
       );
     }
   }
+  function markStale() {
+    var raw = tryInput.value.trim();
+    if (raw === shown) { tryOut.classList.remove('stale'); return; }
+    tryOut.classList.add('stale');
+    tryExit.innerHTML = '<span class="dim">press Run to check ' +
+                        (raw === '' ? 'a port' : esc(raw)) + '</span>';
+  }
+
   tryForm.addEventListener('submit', function (e) { e.preventDefault(); runCheck(); });
-  tryInput.addEventListener('input', runCheck);
+  tryInput.addEventListener('input', markStale);
   runCheck();
 
   /* --------------------------------------------------------- watch pane */
